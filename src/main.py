@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from scipy.spatial import Delaunay
+import json
 
 def loadImages(image1_name, image2_name):
     base_dirrectory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,20 +104,59 @@ def displayTriangulation(image1, image2, points_image1, points_image2, triangles
 
     plt.show()
 
+def saveCorrespondencesToJSON(points_image1, points_image2, filename="correspondences.json"):
+    data = {
+        "points_image1": points_image1.tolist(),
+        "points_image2": points_image2.tolist()
+    }
+    with open(filename, 'w') as file:
+        json.dump(data, file)
+    print(f"Correspondences saved to {filename}")
+
+def loadCorrespondencesFromJSON(filename="correspondences.json"):
+    with open(filename, 'r') as file:
+        data = json.load(file)
+    points_image1 = np.array(data['points_image1'], dtype=np.float32)
+    points_image2 = np.array(data['points_image2'], dtype=np.float32)
+    print(f"Correspondences loaded from {filename}")
+    return points_image1, points_image2
+
 def main():
     # Loading images
-    image1_name = 'PUT IMAGE1 NAME HERE'
-    image2_name = 'EXPECTS IMAGES TO BE IN IMAGES FOLDER'
+    image1_name = 'musk.jpg'
+    image2_name = 'trump.jpg'
     image1, image2 = loadImages(image1_name, image2_name)
 
-    # Collecting correspondences
-    points_image1, points_image2 = collectCorrespondences(image1, image2)
+    # Collecting/loading correspondences
+    choice = input("Load existing correspondences (L) or select new ones (S)? ").strip().lower()
+    if choice == 'l' or choice == 'L':
+        points_image1, points_image2 = loadCorrespondencesFromJSON()
+    else:
+        points_image1, points_image2 = collectCorrespondences(image1, image2)
+        save_choice = input("Save these correspondences to JSON? (Y/N) ").strip().lower()
+        if save_choice == 'y':
+            saveCorrespondencesToJSON(points_image1, points_image2)
 
     # Delaunay triangulation
     triangles_image1 = Delaunay(points_image1)
 
     # Displaying triangulation
     displayTriangulation(image1, image2, points_image1, points_image2, triangles_image1)
+
+    # Looping through triangles, finding intermediate triangle, getting matrix for points from image1 and image2, and warping
+    num_frames = 30
+    for i in range(1, num_frames + 1): # 30 frames
+        for simplex in triangles_image1.simplices: # Each triangle
+            # Getting points for intermediate triangle
+            alpha = i / num_frames
+            interpolated_points = (1- alpha) * points_image1[simplex] + alpha * points_image2[simplex]
+            print(f"Interpolated points for triangle {simplex}: {interpolated_points}")
+
+            # Getting matrix for points from image1 and image2
+
+            # Warp points and save frame
+
+    # Save as GIF
 
 if __name__ == "__main__":
     main()
