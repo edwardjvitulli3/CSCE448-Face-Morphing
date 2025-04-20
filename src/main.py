@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import os
 from scipy.spatial import Delaunay
 import json
+from PIL import Image
 
 def loadImages(image1_name, image2_name):
     base_dirrectory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -114,12 +115,74 @@ def saveCorrespondencesToJSON(points_image1, points_image2, filename="correspond
     print(f"Correspondences saved to {filename}")
 
 def loadCorrespondencesFromJSON(filename="correspondences.json"):
-    with open(filename, 'r') as file:
+    with open('../' + filename, 'r') as file:
         data = json.load(file)
     points_image1 = np.array(data['points_image1'], dtype=np.float32)
     points_image2 = np.array(data['points_image2'], dtype=np.float32)
     print(f"Correspondences loaded from {filename}")
     return points_image1, points_image2
+
+def computeTransformMatrix(interpolated, source):
+    A = np.hstack([interpolated, np.ones((3, 1))])
+    B = source
+    M = np.linalg.solve(A, B)
+    return M.T
+
+def computeTransform(transform, x, y):
+    pt = np.array([x, y, 1.0])
+    return transform @ pt
+
+def getBoundingBox(triangle):
+    x = triangle[:, 0]
+    y = triangle[:, 1]
+    
+    minX = int(np.floor(np.min(x)))
+    maxX = int(np.ceil(np.max(x)))
+    
+    minY = int(np.floor(np.min(y)))
+    maxY = int(np.ceil(np.max(y)))
+    
+    return minX, maxX, minY, maxY
+
+def edge(p1, p2, p):
+    return (p2[0] - p1[0]) * (p[1] - p1[1]) - (p2[1] - p1[1]) * (p[0] - p1[0])
+
+def pointsInBound(pts, triangle):
+    a, b, c = triangle
+    v0 = c - a
+    v1 = b - a
+    v2 = pts - a
+    dot00 = np.dot(v0, v0)
+    dot01 = np.dot(v0, v1)
+    dot11 = np.dot(v1, v1)
+    dot02 = np.sum(v2 * v0, axis = 1)
+    dot12 = np.sum(v2 * v1, axis = 1)
+    denom = dot00 * dot11 - dot01 * dot01
+    inv_denom = 1.0 / denom
+    u = (dot11 * dot02 - dot01 * dot12) * inv_denom
+    v = (dot00 * dot12 - dot01 * dot02) * inv_denom
+    
+    return (u >= 0) & (v >= 0) & (u + v <= 1)
+    
+def bilinearInterpolation(img, pts):
+    h, w, c = img.shape
+    x = pts[:, 0]
+    y = pts[:, 1]
+    
+    x0 = np.clip(np.floor(x).astype(int), 0, w - 1)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    y0 = np.clip(np.floor(y).astype(int), 0, h - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    
+    a = x - x0
+    b = y - y0
+    
+    w1 = (1 - a) * (1 - b)
+    w2 = a * (1 - b)
+    w3 = a * b
+    w4 = (1 - a) * b
+    
+    return w1[:, None] * img[y0, x0] + w2[:, None] * img[y0, x1] + w3[:, None] * img[y1, x1] + w4[:, None] * img[y1, x0]
 
 def main():
     # Loading images
@@ -141,22 +204,64 @@ def main():
     triangles_image1 = Delaunay(points_image1)
 
     # Displaying triangulation
-    displayTriangulation(image1, image2, points_image1, points_image2, triangles_image1)
+    #displayTriangulation(image1, image2, points_image1, points_image2, triangles_image1)
+    
+    #solve for transform matrix from image
 
     # Looping through triangles, finding intermediate triangle, getting matrix for points from image1 and image2, and warping
     num_frames = 30
+    frames = []
     for i in range(1, num_frames + 1): # 30 frames
+        print("computing frame", i)
+        alpha = i / num_frames
+        newImage = np.zeros_like(image1, dtype=np.uint8)
         for simplex in triangles_image1.simplices: # Each triangle
             # Getting points for intermediate triangle
-            alpha = i / num_frames
-            interpolated_points = (1- alpha) * points_image1[simplex] + alpha * points_image2[simplex]
-            print(f"Interpolated points for triangle {simplex}: {interpolated_points}")
-
-            # Getting matrix for points from image1 and image2
-
-            # Warp points and save frame
+            tri_A_pts = points_image1[simplex]
+            tri_B_pts = points_image2[simplex]
+            tri_T_pts = (1- alpha) * tri_A_pts + alpha * tri_B_pts
+            #print(f"Interpolated points for triangle {simplex}: {interpolated_points}")
+            #find the affine transform
+            A_transform_matrix = computeTransformMatrix(tri_T_pts, tri_A_pts)
+            B_transform_matrix = computeTransformMatrix(tri_T_pts, tri_B_pts)
+            #create bound box
+            minX, maxX, minY, maxY = getBoundingBox(tri_T_pts)
+            #clamp values to image dimensions
+            minX = max(minX, 0)
+            maxX = min(maxX, newImage.shape[1])
+            minY = max(minY, 0)
+            maxY = min(maxY, newImage.shape[0])
+            #create a pixel grid
+            px, py = np.meshgrid(np.arange(minX, maxX), np.arange(minY, maxY))
+            pts = np.vstack((px.ravel(), py.ravel())).T
+            #create mask for points inside triangle
+            mask = pointsInBound(pts, tri_T_pts)
+            if not np.any(mask):
+                continue
+            valid_pts = pts[mask]
+            px_valid, py_valid = valid_pts[:, 0], valid_pts[:, 1]
+            #apply affine transform
+            ones = np.ones_like(px_valid)
+            homogeneous = np.vstack([px_valid, py_valid, ones])
+            A_pts = (A_transform_matrix @ homogeneous).T
+            B_pts = (B_transform_matrix @ homogeneous).T
+            #interpolate pixel values
+            pixels_A = bilinearInterpolation(image1, A_pts)
+            pixels_B = bilinearInterpolation(image2, B_pts)
+            #blend pixel values from both images
+            cross_dissolved = ((1 - alpha) * pixels_A + alpha * pixels_B).astype(np.uint8)
+            newImage[py_valid, px_valid] = cross_dissolved
+        frames.append(newImage)
 
     # Save as GIF
+    pil_frames = [Image.fromarray(frame.astype(np.uint8)) for frame in frames]
+    pil_frames[0].save(
+        "../Images/" + image1_name + "_" + image2_name + "_morph.gif",
+        save_all=True,
+        append_images=pil_frames[1:],
+        duration=75,
+        loop=0
+    )
 
 if __name__ == "__main__":
     main()
