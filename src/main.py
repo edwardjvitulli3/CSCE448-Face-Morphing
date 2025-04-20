@@ -3,7 +3,9 @@ import matplotlib.pyplot as plt
 import os
 from scipy.spatial import Delaunay
 import json
-from PIL import Image
+import PySimpleGUI as sg
+from PIL import Image, ImageTk, ImageSequence
+import imageio.v3 as iio
 
 def loadImages(image1_name, image2_name):
     base_dirrectory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -224,6 +226,7 @@ def main():
             #find the affine transform
             A_transform_matrix = computeTransformMatrix(tri_T_pts, tri_A_pts)
             B_transform_matrix = computeTransformMatrix(tri_T_pts, tri_B_pts)
+            #using vectorized operations for optimization
             #create bound box
             minX, maxX, minY, maxY = getBoundingBox(tri_T_pts)
             #clamp values to image dimensions
@@ -254,38 +257,21 @@ def main():
         frames.append(newImage)
 
     # Save as GIF
-    pil_frames = [Image.fromarray(frame.astype(np.uint8)) for frame in frames]
-    pil_frames[0].save(
-        "../Images/" + image1_name + "_" + image2_name + "_morph.gif",
-        save_all=True,
-        append_images=pil_frames[1:],
-        duration=75,
-        loop=0
-    )
+    path = '../Results/'
+    name = image1_name.replace('.jpg', '') + '_' + image2_name.replace('.jpg', '') + '_morph.gif'
+    iio.imwrite(path + name, frames, duration=0.5, loop=0)
+    
+    #uncomment to see gif in a gui
+    
+    # layout = [[sg.Image(key='-IMAGE-')]]
+    # window = sg.Window('GIF Output', layout, element_justification='c')
+    
+    # while True:
+    #     for frame in ImageSequence.Iterator(Image.open(path + name)):
+    #         event, values = window.read(timeout=100)
+    #         if event == sg.WIN_CLOSED:
+    #             exit(0)
+    #         window['-IMAGE-'].update(data=ImageTk.PhotoImage(frame))
 
 if __name__ == "__main__":
     main()
-# import imageio.v3 as iio
-# import skimage.transform as ski
-# import PySimpleGUI as sg
-# from PIL import Image, ImageTk, ImageSequence
-
-# img_files = []
-# for i in range(1, 8):
-#     img_files.append("img" + str(i) + ".jpg")
-
-# images = [iio.imread(img) for img in img_files]
-
-# # Expects the images to be of the same size
-# iio.imwrite("output.gif", images, duration=0.5, loop=0)
-
-# gif_filename = 'output.gif'
-# layout = [[sg.Image(key='-IMAGE-')]]
-# window = sg.Window('GIF Output', layout, element_justification='c')
-
-# while True:
-#     for frame in ImageSequence.Iterator(Image.open(gif_filename)):
-#         event, values = window.read(timeout=100)
-#         if event == sg.WIN_CLOSED:
-#             exit(0)
-#         window['-IMAGE-'].update(data=ImageTk.PhotoImage(frame) )
