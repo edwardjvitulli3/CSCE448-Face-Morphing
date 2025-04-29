@@ -6,6 +6,8 @@ import json
 import PySimpleGUI as sg
 from PIL import Image, ImageTk, ImageSequence
 import imageio.v3 as iio
+import dlib
+import cv2
 
 def loadImages(image1_name, image2_name):
     base_dirrectory = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -126,6 +128,11 @@ def loadCorrespondencesFromJSON(filename="correspondences.json"):
 
 def computeTransformMatrix(interpolated, source):
     A = np.hstack([interpolated, np.ones((3, 1))])
+
+    # Check to see if matrix is invalid. If so, don't transform the triangle
+    if np.linalg.matrix_rank(A) < 3:
+        return np.zeros((2, 3))
+    
     B = source
     M = np.linalg.solve(A, B)
     return M.T
@@ -160,6 +167,8 @@ def pointsInBound(pts, triangle):
     dot02 = np.sum(v2 * v0, axis = 1)
     dot12 = np.sum(v2 * v1, axis = 1)
     denom = dot00 * dot11 - dot01 * dot01
+    if denom == 0:
+        denom = 1.0
     inv_denom = 1.0 / denom
     u = (dot11 * dot02 - dot01 * dot12) * inv_denom
     v = (dot00 * dot12 - dot01 * dot02) * inv_denom
@@ -186,18 +195,48 @@ def bilinearInterpolation(img, pts):
     
     return w1[:, None] * img[y0, x0] + w2[:, None] * img[y0, x1] + w3[:, None] * img[y1, x1] + w4[:, None] * img[y1, x0]
 
+def detect_facial_correspondences(image):
+    # Load necessary dlib functions
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
+
+    grayscale_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    face_list = detector(grayscale_image)
+
+    for face in face_list:
+        landmarks = predictor(grayscale_image, face)
+        points = [(landmarks.part(n).x, landmarks.part(n).y) for n in range(68)]
+
+    points = np.array(points, dtype=np.float32)
+    
+    fixed_points, _ = getFixedPoints(image, image)
+
+    points = np.vstack([points, fixed_points])
+
+    return points
+
 def main():
     # Loading images
-    image1_name = 'musk.jpg'
-    image2_name = 'trump.jpg'
+    image1_name = input("Enter image 1 name: ")
+    image2_name = input("Enter image 2 name: ")
     image1, image2 = loadImages(image1_name, image2_name)
 
+    # Loading images for auto detection
+    img1 = cv2.imread("../Images/" + image1_name)
+    img2 = cv2.imread("../Images/" + image2_name)
+    
     # Collecting/loading correspondences
     choice = input("Load existing correspondences (L) or select new ones (S)? ").strip().lower()
     if choice == 'l' or choice == 'L':
         points_image1, points_image2 = loadCorrespondencesFromJSON()
     else:
-        points_image1, points_image2 = collectCorrespondences(image1, image2)
+        auto_yn = input("Do you want to use automatic face detection? (Y/N) ").strip().lower()
+        if auto_yn == 'y':
+            points_image1 = detect_facial_correspondences(img1)
+            points_image2 = detect_facial_correspondences(img2)
+        else:
+            points_image1, points_image2 = collectCorrespondences(image1, image2)
+        
         save_choice = input("Save these correspondences to JSON? (Y/N) ").strip().lower()
         if save_choice == 'y':
             saveCorrespondencesToJSON(points_image1, points_image2)
